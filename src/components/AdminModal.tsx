@@ -104,9 +104,48 @@ export const AdminModal: React.FC<AdminModalProps> = ({
           return;
         }
 
-        if (data.session) {
+        // After successful sign-in, verify the user is listed in `public.admins`.
+        const userId = (data as any)?.user?.id ?? (data as any)?.session?.user?.id;
+        if (!userId) {
+          setAuthError('Authentication succeeded but no user id was returned.');
+          setAuthLoading(false);
+          return;
+        }
+
+        try {
+          const { data: adminRecord, error: adminError } = await supabase
+            .from('admins')
+            .select('user_id')
+            .eq('user_id', userId)
+            .maybeSingle();
+
+          if (adminError) {
+            setAuthError(`Admin check failed: ${adminError.message}`);
+            // Sign out to avoid leaving an authenticated but unauthorized session
+            await supabase.auth.signOut().catch(() => {});
+            setAuthLoading(false);
+            return;
+          }
+
+          if (!adminRecord) {
+            // Not an admin
+            setAuthError('This account is not authorized as an admin.');
+            await supabase.auth.signOut().catch(() => {});
+            setIsAuthenticated(false);
+            localStorage.removeItem('nexora_admin_auth');
+            setAuthLoading(false);
+            return;
+          }
+
+          // Authorized admin
           setIsAuthenticated(true);
           localStorage.setItem('nexora_admin_auth', 'true');
+          setAuthLoading(false);
+          return;
+        } catch (innerErr: unknown) {
+          const msg = innerErr instanceof Error ? innerErr.message : 'Admin verification failed';
+          setAuthError(msg);
+          await supabase.auth.signOut().catch(() => {});
           setAuthLoading(false);
           return;
         }

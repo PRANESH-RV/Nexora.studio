@@ -1,3 +1,4 @@
+import { supabase } from './lib/supabase'
 import React, { useState, useEffect, useCallback } from 'react';
 import { AnnouncementBar } from './components/AnnouncementBar';
 import { Navbar } from './components/Navbar';

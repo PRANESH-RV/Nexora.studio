@@ -5,13 +5,32 @@ import { INITIAL_PROJECTS } from '../data/initialProjects';
 const STORAGE_KEY_CONFIG = 'nexora_supabase_config';
 const STORAGE_KEY_PROJECTS = 'nexora_local_projects';
 
-// Default Supabase config (placeholder for user to insert credentials)
+// Read env vars once and safely
+const ENV_SUPABASE_URL = typeof import.meta !== 'undefined' ? (import.meta.env.VITE_SUPABASE_URL ?? '') : '';
+const ENV_SUPABASE_ANON = typeof import.meta !== 'undefined' ? (import.meta.env.VITE_SUPABASE_ANON_KEY ?? '') : '';
+
+// Default Supabase config (env vars preferred)
 export const DEFAULT_SUPABASE_CONFIG: SupabaseConfig = {
-  url: '',
-  anonKey: '',
+  url: ENV_SUPABASE_URL,
+  anonKey: ENV_SUPABASE_ANON,
   isConnected: false,
   useLocalFallback: true,
 };
+
+// Singleton Supabase client instance
+let SUPABASE_INSTANCE: SupabaseClient | null = null;
+
+function initSupabaseClient(url: string, anonKey: string): SupabaseClient | null {
+  if (!url || !anonKey) return null;
+  try {
+    SUPABASE_INSTANCE = createClient(url, anonKey);
+    return SUPABASE_INSTANCE;
+  } catch (err) {
+    console.error('Failed to initialize Supabase client', err);
+    SUPABASE_INSTANCE = null;
+    return null;
+  }
+}
 
 // SQL script provided for user to execute in Supabase SQL editor
 export const SUPABASE_SETUP_SQL = `-- 1. Create the projects table
@@ -81,14 +100,19 @@ CREATE POLICY "Admin can delete projects"
 export function getStoredSupabaseConfig(): SupabaseConfig {
   try {
     const saved = localStorage.getItem(STORAGE_KEY_CONFIG);
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      return {
-        ...DEFAULT_SUPABASE_CONFIG,
-        ...parsed,
-        isConnected: Boolean(parsed.url && parsed.anonKey),
-      };
-    }
+    const parsed = saved ? JSON.parse(saved) : {};
+
+    // Prefer environment variables when present. Use localStorage only as a fallback.
+    const url = DEFAULT_SUPABASE_CONFIG.url || parsed.url || '';
+    const anonKey = DEFAULT_SUPABASE_CONFIG.anonKey || parsed.anonKey || '';
+
+    return {
+      ...DEFAULT_SUPABASE_CONFIG,
+      ...parsed,
+      url,
+      anonKey,
+      isConnected: Boolean(url && anonKey),
+    };
   } catch (err) {
     console.error('Failed to parse Supabase config from localStorage', err);
   }
@@ -101,22 +125,30 @@ export function saveStoredSupabaseConfig(config: Partial<SupabaseConfig>): void 
     const updated = {
       ...current,
       ...config,
-      isConnected: Boolean(config.url && config.anonKey),
+      isConnected: Boolean((config.url || current.url) && (config.anonKey || current.anonKey)),
     };
     localStorage.setItem(STORAGE_KEY_CONFIG, JSON.stringify(updated));
+
+    // If a full config was provided, reinitialize the singleton client so we don't create
+    // multiple GoTrueClient instances. This keeps a single shared client across the app.
+    const newUrl = (config.url || current.url || '').trim();
+    const newKey = (config.anonKey || current.anonKey || '').trim();
+    if (newUrl && newKey) {
+      initSupabaseClient(newUrl, newKey);
+    }
   } catch (err) {
     console.error('Failed to save Supabase config', err);
   }
 }
 
 export function getSupabaseClient(): SupabaseClient | null {
+  // Return singleton if already initialized
+  if (SUPABASE_INSTANCE) return SUPABASE_INSTANCE;
+
+  // Initialize using stored config (env vars preferred inside getStoredSupabaseConfig)
   const config = getStoredSupabaseConfig();
   if (config.url && config.anonKey) {
-    try {
-      return createClient(config.url, config.anonKey);
-    } catch (e) {
-      console.warn('Could not initialize Supabase client:', e);
-    }
+    return initSupabaseClient(config.url, config.anonKey);
   }
   return null;
 }
